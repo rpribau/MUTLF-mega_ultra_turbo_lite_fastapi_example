@@ -1,24 +1,22 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-import pickle
-from train_model import deploy_model
 import os
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-if os.path.exists('model.pkl'):
-    print("MODEL FOUND!")
-else:
-    train_X = ["good product", "bad service", "excellent", "terrible"]
-    train_y = [1, 0, 1, 0]
-    deploy_model(train_X, train_y)
+MODEL_PATH = "./transformer_model"
+
+if not os.path.exists(MODEL_PATH):
+    print("Model not found. Initiating training...")
+    from train_model import deploy_model
+    deploy_model()
 
 
 app = FastAPI()
 
-with open("model.pkl", "rb") as f:
-    model = pickle.load(f)
-
-with open("vectorizer.pkl", "rb") as f:
-    vectorizer = pickle.load(f)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
+model.eval()
 
 
 class InputData(BaseModel):
@@ -27,13 +25,22 @@ class InputData(BaseModel):
 @app.post("/predict")
 def predict(data: InputData): ## Equivalente a su score.py
     
-    X = vectorizer.transform([data.text])
-
-    # Predict
-    pred = model.predict(X)[0]
-    prob = model.predict_proba(X)[0][1]
+    encoded = tokenizer(
+        data.text,
+        padding=True, 
+        truncation=True, 
+        return_tensors="pt", 
+        max_length=64
+    )
+    
+    with torch.no_grad():
+        outputs = model(**encoded)
+        logits = outputs.logits
+        probs = torch.nn.functional.softmax(logits, dim=-1)[0]
+        pred = torch.argmax(logits, dim=-1).item()
 
     return {
-        "prediction": int(pred),
-        "probability": float(prob)
+        "prediction": pred,
+        "probability": float(probs[pred])
     }
+
